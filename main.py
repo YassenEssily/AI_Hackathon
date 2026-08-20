@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-import spaces  # استيراد مكتبة spaces الخاصة بـ ZeroGPU
+import spaces
 import gradio as gr
 
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ def load_vector_store():
     return get_or_build_vector_store(DATA_DIRECTORY, VECTOR_DATABASE_DIRECTORY)
 
 
-@spaces.GPU  # ربط تخصيص الـ GPU بالدالة التي تنفذ الاسترجاع والتوليد
+@spaces.GPU
 def gradio_wrapper(question: str):
     if not question.strip():
         return "Please enter a question first.", "", "", ""
@@ -71,9 +71,15 @@ def main() -> None:
         )
         submit = gr.Button("Ask")
 
-        answer_out = gr.Markdown(label="Answer")
-        evidence_out = gr.Markdown(label="Evidence")
-        citations_out = gr.Markdown(label="Sources")
+        gr.Markdown("### Recommendation")
+        answer_out = gr.Markdown()
+
+        gr.Markdown("### Evidence")
+        evidence_out = gr.Markdown()
+
+        gr.Markdown("### Citations")
+        citations_out = gr.Markdown()
+
         with gr.Accordion("Retrieved passages", open=False):
             chunks_out = gr.Markdown()
 
