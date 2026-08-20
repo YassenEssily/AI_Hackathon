@@ -1,83 +1,89 @@
-"""Streamlit interface for the PDF-grounded clinical guideline assistant."""
-
+import os
 from pathlib import Path
 
-import streamlit as st
+import spaces  # استيراد مكتبة spaces الخاصة بـ ZeroGPU
+import gradio as gr
+
 from dotenv import load_dotenv
 
 from model.generation import generate_answer
 from model.retriever import get_or_build_vector_store, retrieve_relevant_chunks
 
+# تحميل البيئة وقراءة المفاتيح من Hugging Face Secrets / env variables
+load_dotenv()
+LLAMA_CLOUD_API_KEY = os.getenv("LLAMA_CLOUD_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIRECTORY = PROJECT_ROOT / "data"
 VECTOR_DATABASE_DIRECTORY = PROJECT_ROOT / "rag_vector_db"
 
 
-@st.cache_resource(show_spinner=False)
 def load_vector_store():
-    """Create the database on first use and reuse it for the Streamlit session."""
-    load_dotenv(PROJECT_ROOT / ".env")
+    """Create the database on first use and reuse it."""
     return get_or_build_vector_store(DATA_DIRECTORY, VECTOR_DATABASE_DIRECTORY)
 
 
-def show_answer(question: str) -> None:
-    """Retrieve grounded evidence and render the generated response."""
-    with st.spinner("Searching the guideline documents..."):
-        relevant_chunks = retrieve_relevant_chunks(load_vector_store(), question)
-        answer = generate_answer(question, relevant_chunks)
+@spaces.GPU  # ربط تخصيص الـ GPU بالدالة التي تنفذ الاسترجاع والتوليد
+def gradio_wrapper(question: str):
+    if not question.strip():
+        return "Please enter a question first.", "", "", ""
 
-    st.subheader("Answer")
-    st.write(answer.get("recommendation", "No answer was returned."))
+    relevant_chunks = retrieve_relevant_chunks(load_vector_store(), question)
+    answer = generate_answer(question, relevant_chunks)
+
+    recommendation = answer.get("recommendation", "No answer was returned.")
 
     evidence = answer.get("evidence", [])
-    if evidence:
-        st.subheader("Evidence")
-        if isinstance(evidence, list):
-            for item in evidence:
-                st.write(f"- {item}")
-        else:
-            st.write(evidence)
+    evidence_text = (
+        "\n".join([f"- {item}" for item in evidence])
+        if isinstance(evidence, list)
+        else str(evidence)
+    )
 
     citations = answer.get("citations", [])
-    if citations:
-        st.subheader("Sources")
-        for citation in citations:
-            st.write(
-                f"- **{citation.get('source', 'Unknown source')}** "
-                f"— page {citation.get('page', 'Unknown')}"
-            )
+    citations_text = "\n".join(
+        [
+            f"- **{c.get('source', 'Unknown')}** — page {c.get('page', 'Unknown')}"
+            for c in citations
+        ]
+    )
 
+    chunks_text = ""
     if relevant_chunks:
-        with st.expander("Retrieved passages"):
-            for document, score in relevant_chunks:
-                source = document.metadata.get("file_name", "Unknown source")
-                page = document.metadata.get("page", "Unknown")
-                st.caption(f"{source} — page {page} | relevance: {score:.2f}")
-                st.write(document.page_content.removeprefix("passage: "))
+        for document, score in relevant_chunks:
+            source = document.metadata.get("file_name", "Unknown source")
+            page = document.metadata.get("page", "Unknown")
+            chunks_text += f"**{source}** — page {page} | relevance: {score:.2f}\n{document.page_content.removeprefix('passage: ')}\n\n"
+
+    return recommendation, evidence_text, citations_text, chunks_text
 
 
 def main() -> None:
-    st.set_page_config(page_title="Clinical Guideline Assistant", page_icon="⚕️")
-    st.title("Clinical Guideline Assistant")
-    st.caption("Answers are grounded only in the PDF guidelines stored in this project.")
-    st.warning(
-        "This tool is for informational guideline lookup only. It is not a substitute "
-        "for professional clinical judgment, diagnosis, or emergency care."
-    )
+    with gr.Blocks(title="Clinical Guideline Assistant") as demo:
+        gr.Markdown(
+            "# ⚕️ Clinical Guideline Assistant\n"
+        )
 
-    with st.form("question_form"):
-        question = st.text_area(
-            "Ask a question about the uploaded guidelines",
+        question = gr.Textbox(
+            label="Ask a question about the uploaded guidelines",
             placeholder="Example: In which age group is glibenclamide not recommended?",
         )
-        submitted = st.form_submit_button("Ask")
+        submit = gr.Button("Ask")
 
-    if submitted:
-        if not question.strip():
-            st.info("Please enter a question first.")
-        else:
-            show_answer(question.strip())
+        answer_out = gr.Markdown(label="Answer")
+        evidence_out = gr.Markdown(label="Evidence")
+        citations_out = gr.Markdown(label="Sources")
+        with gr.Accordion("Retrieved passages", open=False):
+            chunks_out = gr.Markdown()
+
+        submit.click(
+            fn=gradio_wrapper,
+            inputs=question,
+            outputs=[answer_out, evidence_out, citations_out, chunks_out],
+        )
+
+    demo.launch()
 
 
 if __name__ == "__main__":
